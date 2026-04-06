@@ -255,6 +255,32 @@ teardown() {
 
 # ── process_turn ─────────────────────────────────────────────
 
+@test "extract_tool_uses: returns newline-delimited tool metadata" {
+	local blocks='[
+		{"type":"text","text":"ignore"},
+		{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"echo hi"}},
+		{"type":"tool_use","id":"toolu_2","name":"Read","input":{"file_path":"/tmp/x"}}
+	]'
+	local output
+	output=$(extract_tool_uses "$blocks")
+	[[ "$output" == *$'Bash\ttoolu_1\t{"command":"echo hi"}'* ]]
+	[[ "$output" == *$'Read\ttoolu_2\t{"file_path":"/tmp/x"}'* ]]
+}
+
+@test "append_tool_result_json: appends tool results to array" {
+	local results='[]'
+	results=$(append_tool_result_json "$results" '{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}')
+	results=$(append_tool_result_json "$results" '{"type":"tool_result","tool_use_id":"toolu_2","content":"done"}')
+	local count
+	count=$(echo "$results" | jq 'length')
+	[ "$count" -eq 2 ]
+	local first second
+	first=$(echo "$results" | jq -r '.[0].tool_use_id')
+	second=$(echo "$results" | jq -r '.[1].tool_use_id')
+	[ "$first" = "toolu_1" ]
+	[ "$second" = "toolu_2" ]
+}
+
 @test "process_turn: handles stream failure gracefully" {
 	# Stub stream_request_with_retry to fail
 	stream_request_with_retry() { return 1; }
@@ -321,4 +347,54 @@ teardown() {
 	local calls
 	calls=$(cat "$call_count_file")
 	[ "$calls" -eq 2 ]
+}
+
+@test "process_turn: executes multiple tool_use blocks in one response" {
+	local call_count_file="$BATS_TEST_TMPDIR/api_calls_multi"
+	echo "0" > "$call_count_file"
+	local tool_log="$BATS_TEST_TMPDIR/tool_log"
+	: > "$tool_log"
+
+	stream_request_with_retry() {
+		local count
+		count=$(cat "$call_count_file")
+		count=$((count + 1))
+		echo "$count" > "$call_count_file"
+
+		if (( count == 1 )); then
+			RESPONSE_CONTENT_BLOCKS='[
+				{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"echo hi"}},
+				{"type":"tool_use","id":"toolu_2","name":"Read","input":{"file_path":"/tmp/x"}}
+			]'
+			RESPONSE_STOP_REASON="tool_use"
+		else
+			RESPONSE_CONTENT_BLOCKS='[{"type":"text","text":"Done"}]'
+			RESPONSE_STOP_REASON="end_turn"
+		fi
+		RESPONSE_INPUT_TOKENS=10
+		RESPONSE_OUTPUT_TOKENS=5
+		RESPONSE_CACHE_READ=0
+		RESPONSE_CACHE_WRITE=0
+		return 0
+	}
+	export -f stream_request_with_retry
+	export call_count_file
+
+	execute_tool() {
+		printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$tool_log"
+		jq -n --arg id "$2" '{type:"tool_result", tool_use_id:$id, content:"ok"}'
+	}
+	export -f execute_tool
+
+	PRICE_INPUT=3.00
+	PRICE_OUTPUT=15.00
+
+	run process_turn "run two tools"
+	[ "$status" -eq 0 ]
+
+	local calls
+	calls=$(cat "$call_count_file")
+	[ "$calls" -eq 2 ]
+	[[ "$(cat "$tool_log")" == *$'Bash\ttoolu_1\t{"command":"echo hi"}'* ]]
+	[[ "$(cat "$tool_log")" == *$'Read\ttoolu_2\t{"file_path":"/tmp/x"}'* ]]
 }

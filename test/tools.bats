@@ -290,6 +290,25 @@ teardown() {
 
 # ── execute_tool ─────────────────────────────────────────────
 
+@test "parse_simple_object_fields: extracts requested fields in one jq call" {
+	local fields=()
+	mapfile -d '' -t fields < <(parse_simple_object_fields '{"query":"test","allowed_domains":["a.com","b.com"],"blocked_domains":["c.com"]}' \
+		'.query // empty' \
+		'(.allowed_domains // []) | join("\n")' \
+		'(.blocked_domains // []) | join("\n")')
+	[ "${fields[0]}" = "test" ]
+	[ "${fields[1]}" = $'a.com\nb.com' ]
+	[ "${fields[2]}" = "c.com" ]
+}
+
+@test "tool_result_json: escapes special characters" {
+	local output
+	output=$(tool_result_json 'tool"1' $'line 1\nline "2"' true)
+	echo "$output" | jq -e '.tool_use_id == "tool\"1"' > /dev/null
+	echo "$output" | jq -e '.content == "line 1\nline \"2\""' > /dev/null
+	echo "$output" | jq -e '.is_error == true' > /dev/null
+}
+
 @test "execute_tool: dispatches to correct tool" {
 	echo "test content" > "$BATS_TEST_TMPDIR/dispatch.txt"
 	run execute_tool "Read" "test-id-1" "{\"file_path\": \"$BATS_TEST_TMPDIR/dispatch.txt\"}"
@@ -334,6 +353,18 @@ teardown() {
 	[[ "$names" == *"WebFetch"* ]]
 	[[ "$names" == *"WebSearch"* ]]
 	[[ "$names" == *"Write"* ]]
+}
+
+@test "build_tools_json: web tool descriptions discourage redundant calls" {
+	local tools
+	tools=$(build_tools_json)
+	local webfetch_desc websearch_desc
+	webfetch_desc=$(echo "$tools" | jq -r '.[] | select(.name == "WebFetch") | .description')
+	websearch_desc=$(echo "$tools" | jq -r '.[] | select(.name == "WebSearch") | .description')
+	[[ "$webfetch_desc" == *"after you already have a specific URL"* ]]
+	[[ "$webfetch_desc" == *"Do not use it as a search substitute"* ]]
+	[[ "$websearch_desc" == *"Start with a single targeted search"* ]]
+	[[ "$websearch_desc" == *"Avoid repeated searches"* ]]
 }
 
 # ── ask_permission: ask mode ────────────────────────────────
@@ -915,7 +946,7 @@ MOCK_JSON
 MOCK_HTML
 	}
 	export -f curl
-	unset CLAUDE_SH_SEARCH_PROVIDER BRAVE_API_KEY TAVILY_API_KEY SEARXNG_URL
+	unset CLAUDE_SH_SEARCH_PROVIDER BRAVE_API_KEY TAVILY_API_KEY SEARXNG_URL OLLAMA_API_KEY
 	run tool_websearch '{"query": "test"}'
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"Fallback Result"* ]]

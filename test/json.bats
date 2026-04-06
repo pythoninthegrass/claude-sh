@@ -61,6 +61,17 @@ teardown() {
 
 # ── add_user_message ─────────────────────────────────────────
 
+@test "append_message_json: appends object to JSON array file" {
+	init_session
+	append_message_json "$MESSAGES_FILE" '{"role":"user","content":"hello"}'
+	append_message_json "$MESSAGES_FILE" '{"role":"assistant","content":[{"type":"text","text":"hi"}]}'
+	local count last_role
+	count=$(jq 'length' "$MESSAGES_FILE")
+	last_role=$(jq -r '.[-1].role' "$MESSAGES_FILE")
+	[ "$count" -eq 2 ]
+	[ "$last_role" = "assistant" ]
+}
+
 @test "add_user_message: appends user message to history" {
 	init_session
 	add_user_message "hello world"
@@ -213,6 +224,15 @@ and tabs	here'
 	local today
 	today=$(date +%Y-%m-%d)
 	[[ "$prompt" == *"$today"* ]]
+}
+
+@test "build_system_prompt: guides minimal web tool usage" {
+	init_session
+	local prompt
+	prompt=$(build_system_prompt)
+	[[ "$prompt" == *"Use web tools only when the answer depends on current external information"* ]]
+	[[ "$prompt" == *"Prefer one targeted WebSearch before any WebFetch"* ]]
+	[[ "$prompt" == *"Avoid repeated searches for the same question"* ]]
 }
 
 # ── build_request ────────────────────────────────────────────
