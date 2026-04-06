@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
-#
-# claude.sh — Claude Code, rewritten as a bash script
-#
-# Dependencies: curl, jq
-# Optional: rg (ripgrep) for better grep
-#
-# Usage:
-#   export ANTHROPIC_API_KEY="sk-ant-..."
-#   ./claude.sh
-#
-# Environment:
-#   ANTHROPIC_API_KEY   — Required. Your Anthropic API key.
-#   CLAUDE_MODEL        — Model to use (default: claude-sonnet-4-20250514)
-#   CLAUDE_MAX_TOKENS   — Max output tokens (default: 8192)
-#   ANTHROPIC_API_URL   — API base URL (default: https://api.anthropic.com)
-#
+
+: <<'HELP'
+claude.sh — Claude Code, rewritten as a bash script
+
+Dependencies: curl, jq
+Optional: rg (ripgrep) for better grep
+
+Usage:
+	export ANTHROPIC_API_KEY="sk-ant-..."
+	./claude.sh
+
+Environment:
+	ANTHROPIC_API_KEY   — Required. Your Anthropic API key.
+	CLAUDE_MODEL        — Model to use (default: claude-sonnet-4-20250514)
+	CLAUDE_MAX_TOKENS   — Max output tokens (default: 8192)
+	ANTHROPIC_API_URL   — API base URL (default: https://api.anthropic.com)
+HELP
 
 set -euo pipefail
 
