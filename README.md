@@ -55,7 +55,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 ### Commands
 
-```
+```txt
 /help      — Show help
 /cost      — Show session cost
 /model     — Show/change model
@@ -83,7 +83,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 ## Architecture
 
-```
+```txt
 claude.sh          # Main REPL loop, slash commands, process_turn()
 lib/
   api.sh           # Anthropic API client, SSE streaming via FIFO, retry
