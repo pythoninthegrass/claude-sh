@@ -166,20 +166,23 @@ process_sse_event() {
 
     case "$event" in
         message_start)
-            local input_tokens cache_read cache_write
-            input_tokens=$(echo "$data" | jq -r '.message.usage.input_tokens // 0' 2>/dev/null)
-            cache_read=$(echo "$data" | jq -r '.message.usage.cache_read_input_tokens // 0' 2>/dev/null)
-            cache_write=$(echo "$data" | jq -r '.message.usage.cache_creation_input_tokens // 0' 2>/dev/null)
+            # Single jq call extracts all three usage fields (was 3 separate calls)
+            local usage_line
+            usage_line=$(echo "$data" | jq -r '.message.usage | "\(.input_tokens // 0)\t\(.cache_read_input_tokens // 0)\t\(.cache_creation_input_tokens // 0)"' 2>/dev/null)
             {
-                echo "input_tokens=$input_tokens"
-                echo "cache_read=$cache_read"
-                echo "cache_write=$cache_write"
+                echo "input_tokens=${usage_line%%	*}"
+                local rest="${usage_line#*	}"
+                echo "cache_read=${rest%%	*}"
+                echo "cache_write=${rest#*	}"
             } >> "$meta_file"
             ;;
 
         content_block_start)
-            local block_type
-            block_type=$(echo "$data" | jq -r '.content_block.type // empty' 2>/dev/null)
+            # Single jq call extracts type + name (was 2-4 separate calls)
+            local block_info block_type tool_name
+            block_info=$(echo "$data" | jq -r '.content_block | "\(.type // "")\t\(.name // "")"' 2>/dev/null)
+            block_type="${block_info%%	*}"
+            tool_name="${block_info#*	}"
 
             if [[ "$block_type" == "text" ]]; then
                 : > "$text_accum_file"
@@ -187,9 +190,6 @@ process_sse_event() {
             elif [[ "$block_type" == "tool_use" ]]; then
                 : > "$tool_json_file"
                 echo "$data" | jq -c '.content_block' > "$current_block_file"
-                # Show tool name as it starts
-                local tool_name
-                tool_name=$(echo "$data" | jq -r '.content_block.name // empty' 2>/dev/null)
                 if [[ -n "$tool_name" ]]; then
                     printf '\n%b  [calling %s...]%b' "$DIM" "$tool_name" "$RESET"
                 fi
@@ -197,17 +197,15 @@ process_sse_event() {
             ;;
 
         content_block_delta)
-            local delta_type
-            delta_type=$(echo "$data" | jq -r '.delta.type // empty' 2>/dev/null)
-
-            if [[ "$delta_type" == "text_delta" ]]; then
+            # Bash pattern match avoids a jq fork to detect delta type (was 2 jq per event)
+            if [[ "$data" == *'"text_delta"'* ]]; then
                 local text
                 text=$(echo "$data" | jq -r '.delta.text // empty' 2>/dev/null)
                 # Print to terminal in real-time (this is the streaming magic)
                 printf '%s' "$text"
                 # Also accumulate for history
                 printf '%s' "$text" >> "$text_accum_file"
-            elif [[ "$delta_type" == "input_json_delta" ]]; then
+            elif [[ "$data" == *'"input_json_delta"'* ]]; then
                 local partial
                 partial=$(echo "$data" | jq -r '.delta.partial_json // empty' 2>/dev/null)
                 printf '%s' "$partial" >> "$tool_json_file"
@@ -215,36 +213,35 @@ process_sse_event() {
             ;;
 
         content_block_stop)
-            local block block_type
+            # Bash pattern match for type avoids a jq fork
+            local block
             block=$(cat "$current_block_file")
-            block_type=$(echo "$block" | jq -r '.type // empty' 2>/dev/null)
 
-            if [[ "$block_type" == "text" ]]; then
-                local full_text text_escaped finalized
-                full_text=$(cat "$text_accum_file")
-                text_escaped=$(jq -Rs '.' <<< "$full_text")
-                finalized=$(echo "$block" | jq --argjson text "$text_escaped" '.text = $text')
-                jq --argjson block "$finalized" '. += [$block]' "$blocks_file" > "${blocks_file}.tmp" && \
+            if [[ "$block" == *'"text"'* ]]; then
+                # Single jq: read raw text, set on block, append to array (was 4 jq)
+                jq --rawfile text "$text_accum_file" \
+                    --argjson block "$block" \
+                    '. += [$block | .text = $text]' "$blocks_file" > "${blocks_file}.tmp" && \
                     mv "${blocks_file}.tmp" "$blocks_file"
 
-            elif [[ "$block_type" == "tool_use" ]]; then
-                local tool_json parsed_input finalized
+            elif [[ "$block" == *'"tool_use"'* ]]; then
+                # Single jq: parse raw JSON input, set on block, append (was 4 jq)
+                local tool_json
                 tool_json=$(cat "$tool_json_file")
-                parsed_input=$(echo "$tool_json" | jq -c '.' 2>/dev/null || echo '{}')
-                finalized=$(echo "$block" | jq --argjson input "$parsed_input" '.input = $input')
-                jq --argjson block "$finalized" '. += [$block]' "$blocks_file" > "${blocks_file}.tmp" && \
+                jq --argjson block "$block" --arg raw "$tool_json" \
+                    '. += [$block | .input = ($raw | fromjson? // {})]' "$blocks_file" > "${blocks_file}.tmp" && \
                     mv "${blocks_file}.tmp" "$blocks_file"
                 printf '\n'
             fi
             ;;
 
         message_delta)
-            local stop_reason output_tokens
-            stop_reason=$(echo "$data" | jq -r '.delta.stop_reason // empty' 2>/dev/null)
-            output_tokens=$(echo "$data" | jq -r '.usage.output_tokens // 0' 2>/dev/null)
+            # Single jq call extracts both fields (was 2 separate calls)
+            local delta_line
+            delta_line=$(echo "$data" | jq -r '"\(.delta.stop_reason // "")\t\(.usage.output_tokens // 0)"' 2>/dev/null)
             {
-                echo "stop_reason=$stop_reason"
-                echo "output_tokens=$output_tokens"
+                echo "stop_reason=${delta_line%%	*}"
+                echo "output_tokens=${delta_line#*	}"
             } >> "$meta_file"
             ;;
 

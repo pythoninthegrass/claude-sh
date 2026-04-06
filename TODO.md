@@ -1,8 +1,9 @@
 # TODO
 
 - Add missing tools (that're useful anyway)
-  - [ ] websearch
-  - [ ] webfetch
+  - > Tell me about the Thinkstation PGX vs the current gen mac studio
+  - [x] websearch
+  - [x] webfetch
 - Bugs found by test suite
   - [x] `is_safe_command` extracts only first word via `awk '{print $1}'`, so multi-word case patterns like `git\ log` never match
   - [x] `ask_permission` in `deny` mode returns 1 before checking `is_safe_command`, blocking read-only commands like `ls`

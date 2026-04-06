@@ -81,6 +81,11 @@ Three modes via `CLAUDE_SH_PERMISSIONS`: `ask` (default), `allow`, `deny`. Read-
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Model selection |
 | `CLAUDE_MAX_TOKENS` | `8192` | Output token limit |
 | `CLAUDE_SH_PERMISSIONS` | `ask` | Permission mode |
+| `CLAUDE_SH_SEARCH_PROVIDER` | (auto-detect) | WebSearch provider: `brave`, `tavily`, `ollama`, `searxng`, `duckduckgo` |
+| `BRAVE_API_KEY` | (optional) | Brave Search API key |
+| `TAVILY_API_KEY` | (optional) | Tavily Search API key |
+| `OLLAMA_API_KEY` | (optional) | Ollama API key (`ollama signin`) |
+| `SEARXNG_URL` | (optional) | SearXNG instance URL (e.g. `http://localhost:8080`) |
 
 ## ShellCheck
 

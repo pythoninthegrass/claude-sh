@@ -313,12 +313,12 @@ teardown() {
 	echo "$output" | jq -e 'type == "array"'
 }
 
-@test "build_tools_json: contains all six tools" {
+@test "build_tools_json: contains all eight tools" {
 	local tools
 	tools=$(build_tools_json)
 	local count
 	count=$(echo "$tools" | jq 'length')
-	[ "$count" -eq 6 ]
+	[ "$count" -eq 8 ]
 }
 
 @test "build_tools_json: tool names match expected set" {
@@ -331,6 +331,8 @@ teardown() {
 	[[ "$names" == *"Glob"* ]]
 	[[ "$names" == *"Grep"* ]]
 	[[ "$names" == *"Read"* ]]
+	[[ "$names" == *"WebFetch"* ]]
+	[[ "$names" == *"WebSearch"* ]]
 	[[ "$names" == *"Write"* ]]
 }
 
@@ -665,9 +667,316 @@ teardown() {
 	[[ "$output" == *"tool_use_id"* ]]
 }
 
+@test "execute_tool: dispatches WebFetch tool" {
+	# Start a local HTTP server
+	local port=18787
+	echo "<html><body><p>webfetch dispatch test</p></body></html>" > "$BATS_TEST_TMPDIR/dispatch.html"
+	python3 -m http.server "$port" --directory "$BATS_TEST_TMPDIR" &>/dev/null &
+	local server_pid=$!
+	sleep 0.5
+	run execute_tool "WebFetch" "id-webfetch" "{\"url\": \"http://localhost:$port/dispatch.html\"}"
+	kill "$server_pid" 2>/dev/null || true
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"tool_use_id"* ]]
+	[[ "$output" == *"webfetch dispatch test"* ]]
+}
+
+@test "execute_tool: dispatches WebSearch tool" {
+	# Mock curl to return canned DuckDuckGo HTML
+	curl() {
+		cat <<'MOCK_HTML'
+<div class="result">
+<a class="result__a" href="https://example.com">Example Result</a>
+<a class="result__snippet">A test snippet</a>
+</div>
+MOCK_HTML
+	}
+	export -f curl
+	unset CLAUDE_SH_SEARCH_PROVIDER BRAVE_API_KEY TAVILY_API_KEY SEARXNG_URL
+	run execute_tool "WebSearch" "id-websearch" '{"query": "test search"}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"tool_use_id"* ]]
+}
+
 @test "execute_tool: marks result as error when tool fails" {
 	run execute_tool "Read" "id-fail" '{"file_path": "/nonexistent/file"}'
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"is_error"* ]]
 	[[ "$output" == *"true"* ]]
+}
+
+# ── tool_webfetch ───────────────────────────────────────────
+
+@test "tool_webfetch: returns error when url is empty" {
+	run tool_webfetch '{"url": ""}'
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"url is required"* ]]
+}
+
+@test "tool_webfetch: fetches and strips HTML" {
+	local port=18788
+	cat > "$BATS_TEST_TMPDIR/test.html" <<'HTML'
+<html>
+<head><title>Test Page</title></head>
+<body>
+<script>var x = 1;</script>
+<style>.foo { color: red; }</style>
+<nav>Navigation</nav>
+<h1>Main Title</h1>
+<p>This is the body text.</p>
+<noscript>No JS</noscript>
+</body>
+</html>
+HTML
+	python3 -m http.server "$port" --directory "$BATS_TEST_TMPDIR" &>/dev/null &
+	local server_pid=$!
+	sleep 0.5
+	run tool_webfetch "{\"url\": \"http://localhost:$port/test.html\"}"
+	kill "$server_pid" 2>/dev/null || true
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Main Title"* ]]
+	[[ "$output" == *"This is the body text."* ]]
+	# Script/style/nav/noscript content should be stripped
+	[[ "$output" != *"var x = 1"* ]]
+	[[ "$output" != *"color: red"* ]]
+	[[ "$output" != *"Navigation"* ]]
+	[[ "$output" != *"No JS"* ]]
+}
+
+@test "tool_webfetch: truncates long output" {
+	local port=18789
+	# Generate >20000 chars of plain text
+	python3 -c "print('A' * 25000)" > "$BATS_TEST_TMPDIR/large.txt"
+	python3 -m http.server "$port" --directory "$BATS_TEST_TMPDIR" &>/dev/null &
+	local server_pid=$!
+	sleep 0.5
+	run tool_webfetch "{\"url\": \"http://localhost:$port/large.txt\"}"
+	kill "$server_pid" 2>/dev/null || true
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"truncated"* ]]
+}
+
+@test "tool_webfetch: includes prompt hint when provided" {
+	local port=18790
+	echo "Some content here" > "$BATS_TEST_TMPDIR/hint.txt"
+	python3 -m http.server "$port" --directory "$BATS_TEST_TMPDIR" &>/dev/null &
+	local server_pid=$!
+	sleep 0.5
+	run tool_webfetch "{\"url\": \"http://localhost:$port/hint.txt\", \"prompt\": \"extract the title\"}"
+	kill "$server_pid" 2>/dev/null || true
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"[User hint: extract the title]"* ]]
+	[[ "$output" == *"Some content here"* ]]
+}
+
+@test "tool_webfetch: handles plain text content" {
+	local port=18791
+	echo "Plain text file content" > "$BATS_TEST_TMPDIR/plain.txt"
+	python3 -m http.server "$port" --directory "$BATS_TEST_TMPDIR" &>/dev/null &
+	local server_pid=$!
+	sleep 0.5
+	run tool_webfetch "{\"url\": \"http://localhost:$port/plain.txt\"}"
+	kill "$server_pid" 2>/dev/null || true
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Plain text file content"* ]]
+}
+
+@test "tool_webfetch: returns error on curl failure" {
+	run tool_webfetch '{"url": "http://localhost:19999/nonexistent"}'
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"Error"* ]] || [[ "$output" == *"error"* ]] || [[ "$output" == *"Failed"* ]]
+}
+
+# ── tool_websearch ──────────────────────────────────────────
+
+@test "tool_websearch: returns error when query is empty" {
+	run tool_websearch '{"query": ""}'
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"query is required"* ]]
+}
+
+@test "tool_websearch: brave provider parses response" {
+	curl() {
+		cat <<'MOCK_JSON'
+{"web":{"results":[{"title":"Brave Result","url":"https://brave.com","description":"A brave description"}]}}
+MOCK_JSON
+	}
+	export -f curl
+	CLAUDE_SH_SEARCH_PROVIDER=brave
+	BRAVE_API_KEY=test-key
+	run tool_websearch '{"query": "test"}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Brave Result"* ]]
+	[[ "$output" == *"https://brave.com"* ]]
+	[[ "$output" == *"A brave description"* ]]
+}
+
+@test "tool_websearch: tavily provider parses response" {
+	curl() {
+		cat <<'MOCK_JSON'
+{"results":[{"title":"Tavily Result","url":"https://tavily.com","content":"A tavily snippet"}]}
+MOCK_JSON
+	}
+	export -f curl
+	CLAUDE_SH_SEARCH_PROVIDER=tavily
+	TAVILY_API_KEY=test-key
+	run tool_websearch '{"query": "test"}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Tavily Result"* ]]
+	[[ "$output" == *"https://tavily.com"* ]]
+	[[ "$output" == *"A tavily snippet"* ]]
+}
+
+@test "tool_websearch: searxng provider parses response" {
+	curl() {
+		cat <<'MOCK_JSON'
+{"results":[{"title":"SearXNG Result","url":"https://searxng.local","content":"A searxng snippet"}]}
+MOCK_JSON
+	}
+	export -f curl
+	CLAUDE_SH_SEARCH_PROVIDER=searxng
+	SEARXNG_URL=http://localhost:8080
+	run tool_websearch '{"query": "test"}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"SearXNG Result"* ]]
+	[[ "$output" == *"https://searxng.local"* ]]
+	[[ "$output" == *"A searxng snippet"* ]]
+}
+
+@test "tool_websearch: duckduckgo provider parses response" {
+	curl() {
+		cat <<'MOCK_HTML'
+<div class="result">
+<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage">Example Page Title</a>
+<a class="result__snippet">This is the snippet text for the result.</a>
+</div>
+<div class="result">
+<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fother.com">Other Result</a>
+<a class="result__snippet">Another snippet.</a>
+</div>
+MOCK_HTML
+	}
+	export -f curl
+	CLAUDE_SH_SEARCH_PROVIDER=duckduckgo
+	run tool_websearch '{"query": "test"}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Example Page Title"* ]]
+	[[ "$output" == *"example.com"* ]]
+	[[ "$output" == *"This is the snippet text"* ]]
+}
+
+@test "tool_websearch: ollama provider parses response" {
+	curl() {
+		cat <<'MOCK_JSON'
+{"results":[{"title":"Ollama Result","url":"https://ollama.com","content":"An ollama snippet"}]}
+MOCK_JSON
+	}
+	export -f curl
+	CLAUDE_SH_SEARCH_PROVIDER=ollama
+	OLLAMA_API_KEY=test-key
+	run tool_websearch '{"query": "test"}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Ollama Result"* ]]
+	[[ "$output" == *"https://ollama.com"* ]]
+	[[ "$output" == *"An ollama snippet"* ]]
+}
+
+@test "tool_websearch: auto-detects ollama provider from env" {
+	curl() {
+		echo '{"results":[{"title":"Auto Ollama","url":"https://auto-ollama.com","content":"auto detected"}]}'
+	}
+	export -f curl
+	unset CLAUDE_SH_SEARCH_PROVIDER BRAVE_API_KEY TAVILY_API_KEY SEARXNG_URL
+	OLLAMA_API_KEY=test-key
+	run tool_websearch '{"query": "test"}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Auto Ollama"* ]]
+}
+
+@test "tool_websearch: auto-detects brave provider from env" {
+	curl() {
+		echo '{"web":{"results":[{"title":"Auto Brave","url":"https://auto.com","description":"auto detected"}]}}'
+	}
+	export -f curl
+	unset CLAUDE_SH_SEARCH_PROVIDER TAVILY_API_KEY SEARXNG_URL
+	BRAVE_API_KEY=test-key
+	run tool_websearch '{"query": "test"}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Auto Brave"* ]]
+}
+
+@test "tool_websearch: falls back to duckduckgo when no API keys set" {
+	curl() {
+		cat <<'MOCK_HTML'
+<div class="result">
+<a class="result__a" href="https://fallback.com">Fallback Result</a>
+<a class="result__snippet">Fallback snippet</a>
+</div>
+MOCK_HTML
+	}
+	export -f curl
+	unset CLAUDE_SH_SEARCH_PROVIDER BRAVE_API_KEY TAVILY_API_KEY SEARXNG_URL
+	run tool_websearch '{"query": "test"}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Fallback Result"* ]]
+}
+
+@test "tool_websearch: duckduckgo detects CAPTCHA challenge" {
+	curl() {
+		cat <<'MOCK_HTML'
+<form id="challenge-form" action="//duckduckgo.com/anomaly.js" method="POST">
+<div class="anomaly-modal__description">Please complete the challenge</div>
+</form>
+MOCK_HTML
+	}
+	export -f curl
+	CLAUDE_SH_SEARCH_PROVIDER=duckduckgo
+	run tool_websearch '{"query": "test"}'
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"CAPTCHA"* ]]
+	[[ "$output" == *"BRAVE_API_KEY"* ]]
+}
+
+@test "tool_websearch: respects allowed_domains" {
+	local captured_query=""
+	curl() {
+		captured_query="$*"
+		cat <<'MOCK_HTML'
+<div class="result">
+<a class="result__a" href="https://allowed.com">Allowed</a>
+<a class="result__snippet">snippet</a>
+</div>
+MOCK_HTML
+		# Write captured query to a file for inspection
+		echo "$captured_query" > "$BATS_TEST_TMPDIR/captured_query.txt"
+	}
+	export -f curl
+	unset CLAUDE_SH_SEARCH_PROVIDER BRAVE_API_KEY TAVILY_API_KEY SEARXNG_URL
+	run tool_websearch '{"query": "test", "allowed_domains": ["example.com", "other.com"]}'
+	[ "$status" -eq 0 ]
+	# The URL-encoded query should contain site: operators
+	local captured
+	captured=$(cat "$BATS_TEST_TMPDIR/captured_query.txt" 2>/dev/null || true)
+	[[ "$captured" == *"site"* ]]
+}
+
+@test "tool_websearch: respects blocked_domains" {
+	local captured_query=""
+	curl() {
+		captured_query="$*"
+		cat <<'MOCK_HTML'
+<div class="result">
+<a class="result__a" href="https://good.com">Good</a>
+<a class="result__snippet">snippet</a>
+</div>
+MOCK_HTML
+		echo "$captured_query" > "$BATS_TEST_TMPDIR/captured_query.txt"
+	}
+	export -f curl
+	unset CLAUDE_SH_SEARCH_PROVIDER BRAVE_API_KEY TAVILY_API_KEY SEARXNG_URL
+	run tool_websearch '{"query": "test", "blocked_domains": ["bad.com"]}'
+	[ "$status" -eq 0 ]
+	local captured
+	captured=$(cat "$BATS_TEST_TMPDIR/captured_query.txt" 2>/dev/null || true)
+	[[ "$captured" == *"site"* ]]
 }

@@ -193,9 +193,10 @@ process_turn() {
             break
         fi
 
-        # Extract and execute tool_use blocks
-        local tool_count
-        tool_count=$(echo "$RESPONSE_CONTENT_BLOCKS" | jq '[.[] | select(.type == "tool_use")] | length')
+        # Extract tool_use blocks once (was N+1 separate jq calls per tool)
+        local tool_blocks tool_count
+        tool_blocks=$(echo "$RESPONSE_CONTENT_BLOCKS" | jq -c '[.[] | select(.type == "tool_use")]')
+        tool_count=$(echo "$tool_blocks" | jq 'length')
 
         if (( tool_count == 0 )); then
             break
@@ -208,13 +209,12 @@ process_turn() {
         local i
 
         for (( i = 0; i < tool_count; i++ )); do
-            local tool_block
-            tool_block=$(echo "$RESPONSE_CONTENT_BLOCKS" | jq -c "[.[] | select(.type == \"tool_use\")][$i]")
-
-            local tool_name tool_id tool_input
-            tool_name=$(echo "$tool_block" | jq -r '.name')
-            tool_id=$(echo "$tool_block" | jq -r '.id')
-            tool_input=$(echo "$tool_block" | jq -c '.input')
+            # Single jq extracts name+id (was 4 jq per tool: select+name+id+input)
+            local tool_info tool_name tool_id tool_input
+            tool_info=$(echo "$tool_blocks" | jq -r ".[$i] | \"\(.name)\t\(.id)\"")
+            tool_name="${tool_info%%	*}"
+            tool_id="${tool_info#*	}"
+            tool_input=$(echo "$tool_blocks" | jq -c ".[$i].input")
 
             # Execute the tool
             local result

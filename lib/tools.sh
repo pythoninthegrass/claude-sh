@@ -132,6 +132,48 @@ build_tools_json() {
       },
       "required": ["pattern"]
     }
+  },
+  {
+    "name": "WebFetch",
+    "description": "Fetches a URL and returns its content as readable text. HTML is converted to plain text.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The URL to fetch"
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Hint for what content to focus on"
+        }
+      },
+      "required": ["url"]
+    }
+  },
+  {
+    "name": "WebSearch",
+    "description": "Searches the web and returns results with titles, URLs, and snippets. Providers: Brave (BRAVE_API_KEY), Tavily (TAVILY_API_KEY), Ollama (OLLAMA_API_KEY), SearXNG (SEARXNG_URL), DuckDuckGo (fallback, may hit CAPTCHAs). Set CLAUDE_SH_SEARCH_PROVIDER to override auto-detection.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search query"
+        },
+        "allowed_domains": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Only return results from these domains"
+        },
+        "blocked_domains": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Exclude results from these domains"
+        }
+      },
+      "required": ["query"]
+    }
   }
 ]
 TOOLS
@@ -153,7 +195,9 @@ execute_tool() {
         Edit)   result=$(tool_edit "$input_json") ;;
         Write)  result=$(tool_write "$input_json") ;;
         Glob)   result=$(tool_glob "$input_json") ;;
-        Grep)   result=$(tool_grep "$input_json") ;;
+        Grep)     result=$(tool_grep "$input_json") ;;
+        WebFetch)  result=$(tool_webfetch "$input_json") ;;
+        WebSearch) result=$(tool_websearch "$input_json") ;;
         *)
             result="Unknown tool: $tool_name"
             is_error=true
@@ -471,4 +515,431 @@ tool_grep() {
     count=$(echo "$output" | grep -c . 2>/dev/null || echo 0)
     print_dim "  ($count matches)"
     echo "$output"
+}
+
+# ── WebFetch ─────────────────────────────────────────────────
+
+# Convert HTML to plain text using python3 HTMLParser (stdlib)
+_html_to_text() {
+    if command -v python3 &>/dev/null; then
+        python3 -c '
+import sys
+from html.parser import HTMLParser
+
+class TextExtractor(HTMLParser):
+    SKIP = {"script","style","nav","noscript"}
+    BLOCK = {"p","div","br","li","tr","h1","h2","h3","h4","h5","h6","section","article"}
+    def __init__(self):
+        super().__init__()
+        self._skip = 0
+        self._text = []
+    def handle_starttag(self, tag, attrs):
+        if tag in self.SKIP: self._skip += 1
+        elif tag in self.BLOCK: self._text.append("\n")
+    def handle_endtag(self, tag):
+        if tag in self.SKIP: self._skip = max(0, self._skip - 1)
+        elif tag in self.BLOCK: self._text.append("\n")
+    def handle_data(self, data):
+        if not self._skip: self._text.append(data)
+
+import re
+p = TextExtractor()
+p.feed(sys.stdin.read())
+text = "".join(p._text)
+text = re.sub(r"\n{3,}", "\n\n", text).strip()
+print(text)
+'
+    else
+        # Fallback: strip tags with sed
+        sed -e 's/<script[^>]*>.*<\/script>//g' \
+            -e 's/<style[^>]*>.*<\/style>//g' \
+            -e 's/<[^>]*>//g' \
+            -e '/^[[:space:]]*$/d'
+    fi
+}
+
+tool_webfetch() {
+    local input="$1"
+    local url prompt
+    url=$(echo "$input" | jq -r '.url // empty')
+    prompt=$(echo "$input" | jq -r '.prompt // empty')
+
+    if [[ -z "$url" ]]; then
+        echo "Error: url is required"
+        return 1
+    fi
+
+    print_tool_header "WebFetch" "$url"
+
+    local tmpfile
+    tmpfile=$(mktemp "${TMPDIR:-/tmp}/webfetch.XXXXXX")
+    trap 'rm -f "$tmpfile"' RETURN
+
+    # Fetch URL, capture content-type
+    local content_type http_code
+    content_type=$(curl -sS -L \
+        --max-time 15 \
+        --max-redirs 5 \
+        --max-filesize 2097152 \
+        -A "claude.sh/1.0" \
+        -o "$tmpfile" \
+        -w '%{content_type}\n%{http_code}' \
+        "$url" 2>/dev/null) || {
+        echo "Error: failed to fetch $url"
+        return 1
+    }
+
+    http_code=$(echo "$content_type" | tail -1)
+    content_type=$(echo "$content_type" | head -1)
+
+    if (( http_code >= 400 )); then
+        echo "Error: HTTP $http_code fetching $url"
+        return 1
+    fi
+
+    # Convert HTML to text, or pass through plain text
+    local output
+    if [[ "$content_type" == *"text/html"* ]]; then
+        output=$(_html_to_text < "$tmpfile")
+    else
+        output=$(cat "$tmpfile")
+    fi
+
+    # Prepend prompt hint if provided
+    if [[ -n "$prompt" ]]; then
+        output="[User hint: $prompt]
+
+$output"
+    fi
+
+    # Truncate to 20000 chars
+    if (( ${#output} > 20000 )); then
+        output="${output:0:20000}
+
+[Content truncated at 20000 characters]"
+    fi
+
+    print_dim "  (${#output} chars)"
+    echo "$output"
+}
+
+# ── WebSearch ────────────────────────────────────────────────
+
+_websearch_brave() {
+    local query="$1"
+
+    if [[ -z "${BRAVE_API_KEY:-}" ]]; then
+        echo "Error: BRAVE_API_KEY is required. Get a free key at https://brave.com/search/api/"
+        return 1
+    fi
+
+    local encoded
+    encoded=$(jq -rn --arg q "$query" '$q|@uri')
+
+    local response
+    response=$(curl -sS --max-time 10 \
+        -H "Accept: application/json" \
+        -H "Accept-Encoding: identity" \
+        -H "X-Subscription-Token: $BRAVE_API_KEY" \
+        "https://api.search.brave.com/res/v1/web/search?q=${encoded}&count=10" 2>/dev/null) || {
+        echo "Error: Brave Search API request failed"
+        return 1
+    }
+
+    local results
+    results=$(echo "$response" | jq -r '.web.results[]? | "## \(.title)\n\(.url)\n\(.description // "")\n"' 2>/dev/null)
+
+    if [[ -z "$results" ]]; then
+        local api_error
+        api_error=$(echo "$response" | jq -r '.message // .error // empty' 2>/dev/null)
+        if [[ -n "$api_error" ]]; then
+            echo "Error: Brave API: $api_error"
+            return 1
+        fi
+        echo "No results found."
+        return 0
+    fi
+
+    echo "$results"
+}
+
+_websearch_tavily() {
+    local query="$1"
+
+    if [[ -z "${TAVILY_API_KEY:-}" ]]; then
+        echo "Error: TAVILY_API_KEY is required. Get a free key at https://tavily.com/"
+        return 1
+    fi
+
+    local body
+    body=$(jq -n --arg q "$query" --arg k "$TAVILY_API_KEY" \
+        '{api_key: $k, query: $q, max_results: 10}')
+
+    local response
+    response=$(curl -sS --max-time 10 \
+        -X POST \
+        -H "Content-Type: application/json" \
+        -d "$body" \
+        "https://api.tavily.com/search" 2>/dev/null) || {
+        echo "Error: Tavily API request failed"
+        return 1
+    }
+
+    local results
+    results=$(echo "$response" | jq -r '.results[]? | "## \(.title)\n\(.url)\n\(.content // "")\n"' 2>/dev/null)
+
+    if [[ -z "$results" ]]; then
+        echo "No results found."
+        return 0
+    fi
+
+    echo "$results"
+}
+
+_websearch_searxng() {
+    local query="$1"
+
+    if [[ -z "${SEARXNG_URL:-}" ]]; then
+        echo "Error: SEARXNG_URL is required (e.g. http://localhost:8080)"
+        return 1
+    fi
+
+    local encoded
+    encoded=$(jq -rn --arg q "$query" '$q|@uri')
+
+    local response
+    response=$(curl -sS --max-time 10 \
+        "${SEARXNG_URL}/search?q=${encoded}&format=json" 2>/dev/null) || {
+        echo "Error: SearXNG request failed"
+        return 1
+    }
+
+    local results
+    results=$(echo "$response" | jq -r '.results[:10][]? | "## \(.title)\n\(.url)\n\(.content // "")\n"' 2>/dev/null)
+
+    if [[ -z "$results" ]]; then
+        echo "No results found."
+        return 0
+    fi
+
+    echo "$results"
+}
+
+# Parse DuckDuckGo HTML results using python3
+_parse_ddg_results() {
+    if command -v python3 &>/dev/null; then
+        python3 -c '
+import sys, re
+from urllib.parse import unquote
+from html.parser import HTMLParser
+
+class DDGParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.results = []
+        self._in_result_a = False
+        self._in_snippet = False
+        self._current = {}
+        self._text = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        cls = attrs.get("class", "")
+        if tag == "a" and "result__a" in cls:
+            self._in_result_a = True
+            self._text = []
+            href = attrs.get("href", "")
+            # Decode DuckDuckGo redirect
+            m = re.search(r"uddg=([^&]+)", href)
+            if m:
+                self._current["url"] = unquote(m.group(1))
+            else:
+                url = href.lstrip("/")
+                if not url.startswith("http"):
+                    url = "https://" + url
+                self._current["url"] = url
+        elif tag == "a" and "result__snippet" in cls:
+            self._in_snippet = True
+            self._text = []
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self._in_result_a:
+            self._in_result_a = False
+            self._current["title"] = "".join(self._text).strip()
+        elif tag == "a" and self._in_snippet:
+            self._in_snippet = False
+            self._current["snippet"] = "".join(self._text).strip()
+            if self._current.get("title") and self._current.get("url"):
+                self.results.append(dict(self._current))
+            self._current = {}
+
+    def handle_data(self, data):
+        if self._in_result_a or self._in_snippet:
+            self._text.append(data)
+
+html = sys.stdin.read()
+p = DDGParser()
+p.feed(html)
+for r in p.results[:10]:
+    t, u, s = r.get("title",""), r.get("url",""), r.get("snippet","")
+    print("## " + t)
+    print(u)
+    print(s)
+    print()
+'
+    else
+        # Fallback: basic grep/sed extraction
+        grep -o 'class="result__a" href="[^"]*">[^<]*' | \
+            head -10 | \
+            sed 's/class="result__a" href="//;s/">/\n/;s/^/## /'
+    fi
+}
+
+_websearch_duckduckgo() {
+    local query="$1"
+
+    local encoded
+    encoded=$(jq -rn --arg q "$query" '$q|@uri')
+
+    local response
+    response=$(curl -sS --max-time 10 \
+        -A "claude.sh/1.0" \
+        "https://html.duckduckgo.com/html/?q=${encoded}" 2>/dev/null) || {
+        echo "Error: DuckDuckGo request failed"
+        return 1
+    }
+
+    # Detect CAPTCHA/anti-bot challenge
+    if echo "$response" | grep -q 'challenge-form\|anomaly'; then
+        echo "Error: DuckDuckGo returned a CAPTCHA challenge. Configure an API-based provider instead:
+  export OLLAMA_API_KEY=...  # ollama signin (free with account)
+  export BRAVE_API_KEY=...   # https://brave.com/search/api/ (free: 2000/month)
+  export TAVILY_API_KEY=...  # https://tavily.com/ (free: 1000/month)
+  export SEARXNG_URL=...     # self-hosted SearXNG instance"
+        return 1
+    fi
+
+    local results
+    results=$(echo "$response" | _parse_ddg_results)
+
+    if [[ -z "$results" ]]; then
+        echo "No results found."
+        return 0
+    fi
+
+    echo "$results"
+}
+
+_websearch_ollama() {
+    local query="$1"
+
+    if [[ -z "${OLLAMA_API_KEY:-}" ]]; then
+        echo "Error: OLLAMA_API_KEY is required. Run 'ollama signin' or set it from https://ollama.com/settings/keys"
+        return 1
+    fi
+
+    local response
+    response=$(curl -sS --max-time 10 \
+        -X POST \
+        -H "Authorization: Bearer $OLLAMA_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d "$(jq -n --arg q "$query" '{query: $q}')" \
+        "https://ollama.com/api/web_search" 2>/dev/null) || {
+        echo "Error: Ollama web search request failed"
+        return 1
+    }
+
+    local results
+    results=$(echo "$response" | jq -r '.results[]? | "## \(.title // "")\n\(.url // "")\n\(.content // .snippet // "")\n"' 2>/dev/null)
+
+    if [[ -z "$results" ]]; then
+        local api_error
+        api_error=$(echo "$response" | jq -r '.error // empty' 2>/dev/null)
+        if [[ -n "$api_error" ]]; then
+            echo "Error: Ollama API: $api_error"
+            return 1
+        fi
+        echo "No results found."
+        return 0
+    fi
+
+    echo "$results"
+}
+
+# Detect search provider from env vars
+_detect_search_provider() {
+    if [[ -n "${CLAUDE_SH_SEARCH_PROVIDER:-}" ]]; then
+        echo "$CLAUDE_SH_SEARCH_PROVIDER"
+    elif [[ -n "${BRAVE_API_KEY:-}" ]]; then
+        echo "brave"
+    elif [[ -n "${TAVILY_API_KEY:-}" ]]; then
+        echo "tavily"
+    elif [[ -n "${OLLAMA_API_KEY:-}" ]]; then
+        echo "ollama"
+    elif [[ -n "${SEARXNG_URL:-}" ]]; then
+        echo "searxng"
+    else
+        echo "duckduckgo"
+    fi
+}
+
+tool_websearch() {
+    local input="$1"
+
+    # Single jq extracts query + domain lists (was 3 separate jq calls)
+    local fields query allowed_domains blocked_domains
+    fields=$(echo "$input" | jq -r '[(.query // ""), ((.allowed_domains // []) | join("\n")), ((.blocked_domains // []) | join("\n"))] | join("\t")' 2>/dev/null)
+    query="${fields%%	*}"
+    local _rest="${fields#*	}"
+    allowed_domains="${_rest%%	*}"
+    blocked_domains="${_rest#*	}"
+
+    if [[ -z "$query" ]]; then
+        echo "Error: query is required"
+        return 1
+    fi
+
+    if [[ -n "$allowed_domains" ]]; then
+        local site_filter=""
+        while IFS= read -r domain; do
+            [[ -n "$site_filter" ]] && site_filter+=" OR "
+            site_filter+="site:${domain}"
+        done <<< "$allowed_domains"
+        query="$query $site_filter"
+    fi
+
+    if [[ -n "$blocked_domains" ]]; then
+        while IFS= read -r domain; do
+            query="$query -site:${domain}"
+        done <<< "$blocked_domains"
+    fi
+
+    local provider
+    provider=$(_detect_search_provider)
+
+    print_tool_header "WebSearch" "$query ($provider)"
+
+    local results
+    case "$provider" in
+        brave)      results=$(_websearch_brave "$query") ;;
+        tavily)     results=$(_websearch_tavily "$query") ;;
+        searxng)    results=$(_websearch_searxng "$query") ;;
+        duckduckgo) results=$(_websearch_duckduckgo "$query") ;;
+        ollama)     results=$(_websearch_ollama "$query") ;;
+        *)
+            echo "Error: unknown search provider '$provider'. Use: brave, tavily, ollama, searxng, duckduckgo"
+            return 1
+            ;;
+    esac
+
+    local exit_code=$?
+    if (( exit_code != 0 )); then
+        echo "$results"
+        return 1
+    fi
+
+    local count
+    count=$(echo "$results" | grep -c '^## ' 2>/dev/null || echo 0)
+    print_dim "  ($count results)"
+    echo "$results"
 }
