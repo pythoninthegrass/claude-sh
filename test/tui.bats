@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
 # tui.bats — tests for lib/tui.sh
 
+bats_require_minimum_version 1.5.0
+
 load test_helper
 
 setup() {
@@ -209,7 +211,7 @@ setup() {
 	[ -z "$SPINNER_PID" ]
 	# Process should no longer be running (give it a moment)
 	sleep 0.1
-	! kill -0 "$pid" 2>/dev/null
+	run ! kill -0 "$pid" 2>/dev/null
 }
 
 @test "stop_spinner: no-op when no spinner is running" {
@@ -223,6 +225,7 @@ setup() {
 @test "cleanup_tui: stops spinner and resets terminal" {
 	start_spinner
 	[ -n "$SPINNER_PID" ]
-	run cleanup_tui
-	[ "$status" -eq 0 ]
+	# Call directly (not via run) so SPINNER_PID is accessible
+	cleanup_tui
+	[ -z "$SPINNER_PID" ]
 }

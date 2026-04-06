@@ -403,11 +403,9 @@ and tabs	here'
 	mkdir -p "$test_dir"
 
 	cd "$test_dir"
-	local output
-	output=$(load_claude_md_files)
-	# Should be empty (may contain HOME claude.md, but no project one)
-	# Just verify it doesn't error
-	[ $? -eq 0 ]
+	# Should not error (may contain HOME claude.md, but no project one)
+	run load_claude_md_files
+	[ "$status" -eq 0 ]
 }
 
 # ── get_git_context ─────────────────────────────────────────

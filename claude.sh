@@ -17,8 +17,6 @@ Environment:
 	ANTHROPIC_API_URL   — API base URL (default: https://api.anthropic.com)
 HELP
 
-set -euo pipefail
-
 # ── Resolve script directory and source libs ──────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -313,4 +311,7 @@ show_exit_summary() {
 }
 
 # ── Entry point ───────────────────────────────────────────────
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    set -euo pipefail
+    main "$@"
+fi

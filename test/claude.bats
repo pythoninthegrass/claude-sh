@@ -4,23 +4,13 @@
 load test_helper
 
 setup() {
-	setup_stubs
 	setup_tempdir
 
-	# Source libs in order (same as claude.sh)
-	source "$PROJECT_ROOT/lib/json.sh"
-	source "$PROJECT_ROOT/lib/tools.sh"
-	source "$PROJECT_ROOT/lib/api.sh"
+	# Source claude.sh directly — the entry point guard prevents main from running
+	source "$PROJECT_ROOT/claude.sh"
 
-	# Source function definitions from claude.sh without executing main or set -euo
-	eval "$(sed \
-		-e '/^#!/d' \
-		-e '/^: <<.*HELP/,/^HELP$/d' \
-		-e '/^set -euo pipefail$/d' \
-		-e '/^SCRIPT_DIR=/d' \
-		-e '/^source /d' \
-		-e '/^main "\$@"$/d' \
-		"$PROJECT_ROOT/claude.sh")"
+	# Apply stubs AFTER sourcing to override real tui functions
+	setup_stubs
 
 	init_session
 	PERMISSION_MODE="allow"

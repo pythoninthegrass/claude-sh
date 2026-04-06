@@ -159,5 +159,5 @@ print_prompt() {
 cleanup_tui() {
     stop_spinner
     printf '%b' "$RESET"
-    tput cnorm 2>/dev/null  # Show cursor
+    tput cnorm 2>/dev/null || true  # Show cursor
 }
