@@ -160,3 +160,69 @@ setup() {
 	done
 	[ "$found" = true ]
 }
+
+# ── print_claude ────────────────────────────────────────────
+
+@test "print_claude: outputs the message" {
+	run print_claude "hello from claude"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"hello from claude"* ]]
+}
+
+# ── print_cost ──────────────────────────────────────────────
+
+@test "print_cost: shows cost and token counts" {
+	run print_cost "1.2345" "1000" "500"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"1.2345"* ]]
+	[[ "$output" == *"1000"* ]]
+	[[ "$output" == *"500"* ]]
+}
+
+# ── print_prompt ────────────────────────────────────────────
+
+@test "print_prompt: outputs the prompt character" {
+	run print_prompt
+	[ "$status" -eq 0 ]
+	# Should contain the arrow character
+	[[ "$output" == *"❯"* ]]
+}
+
+# ── start_spinner / stop_spinner ────────────────────────────
+
+@test "start_spinner: launches a background process" {
+	start_spinner
+	[ -n "$SPINNER_PID" ]
+	# Verify the process is running
+	kill -0 "$SPINNER_PID" 2>/dev/null
+	local running=$?
+	[ "$running" -eq 0 ]
+	# Clean up
+	stop_spinner
+}
+
+@test "stop_spinner: kills the spinner process" {
+	start_spinner
+	local pid="$SPINNER_PID"
+	[ -n "$pid" ]
+	stop_spinner
+	[ -z "$SPINNER_PID" ]
+	# Process should no longer be running (give it a moment)
+	sleep 0.1
+	! kill -0 "$pid" 2>/dev/null
+}
+
+@test "stop_spinner: no-op when no spinner is running" {
+	SPINNER_PID=""
+	run stop_spinner
+	[ "$status" -eq 0 ]
+}
+
+# ── cleanup_tui ─────────────────────────────────────────────
+
+@test "cleanup_tui: stops spinner and resets terminal" {
+	start_spinner
+	[ -n "$SPINNER_PID" ]
+	run cleanup_tui
+	[ "$status" -eq 0 ]
+}

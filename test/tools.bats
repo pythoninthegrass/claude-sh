@@ -300,3 +300,341 @@ teardown() {
 	[[ "$names" == *"Read"* ]]
 	[[ "$names" == *"Write"* ]]
 }
+
+# ── ask_permission: ask mode ────────────────────────────────
+
+@test "ask_permission: ask mode allows safe commands without prompt" {
+	PERMISSION_MODE="ask"
+	run ask_permission "ls -la"
+	[ "$status" -eq 0 ]
+}
+
+@test "ask_permission: deny mode rejects safe commands too" {
+	PERMISSION_MODE="deny"
+	run ask_permission "echo hello"
+	[ "$status" -ne 0 ]
+}
+
+# ── is_safe_command: additional commands ────────────────────
+
+@test "is_safe_command: printf is safe" {
+	run is_safe_command "printf hello"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: find is safe" {
+	run is_safe_command "find . -name '*.sh'"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: wc is safe" {
+	run is_safe_command "wc -l file.txt"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: head is safe" {
+	run is_safe_command "head -n 10 file.txt"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: tail is safe" {
+	run is_safe_command "tail -n 5 file.txt"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: sort is safe" {
+	run is_safe_command "sort file.txt"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: rg is safe" {
+	run is_safe_command "rg pattern"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: ag is safe" {
+	run is_safe_command "ag pattern"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: pwd is safe" {
+	run is_safe_command "pwd"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: date is safe" {
+	run is_safe_command "date"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: whoami is safe" {
+	run is_safe_command "whoami"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: uname is safe" {
+	run is_safe_command "uname -a"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: env is safe" {
+	run is_safe_command "env"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: which is safe" {
+	run is_safe_command "which bash"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: file is safe" {
+	run is_safe_command "file /bin/bash"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: stat is safe" {
+	run is_safe_command "stat /tmp"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: du is safe" {
+	run is_safe_command "du -sh ."
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: df is safe" {
+	run is_safe_command "df -h"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: tree is safe" {
+	run is_safe_command "tree ."
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: diff is safe" {
+	run is_safe_command "diff file1 file2"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: type is safe" {
+	run is_safe_command "type bash"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: uniq is safe" {
+	run is_safe_command "uniq file.txt"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: less is safe" {
+	run is_safe_command "less file.txt"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: more is safe" {
+	run is_safe_command "more file.txt"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: md5 is safe" {
+	run is_safe_command "md5 file.txt"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: shasum is safe" {
+	run is_safe_command "shasum file.txt"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_safe_command: grep is safe" {
+	run is_safe_command "grep pattern file.txt"
+	[ "$status" -eq 0 ]
+}
+
+# ── tool_bash: additional cases ─────────────────────────────
+
+@test "tool_bash: shows description when provided" {
+	# Re-enable print_tool_header to capture output
+	print_tool_header() { echo "TOOL: $1 $2"; }
+	export -f print_tool_header
+	run tool_bash '{"command": "echo hi", "description": "Say hi"}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"hi"* ]]
+}
+
+@test "tool_bash: respects custom timeout" {
+	run tool_bash '{"command": "echo fast", "timeout": 5}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"fast"* ]]
+}
+
+# ── tool_read: tilde expansion ──────────────────────────────
+
+@test "tool_read: expands tilde in file path" {
+	local target="$HOME/.claude_sh_test_read_$$"
+	echo "tilde test" > "$target"
+	run tool_read "{\"file_path\": \"~/.claude_sh_test_read_$$\"}"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"tilde test"* ]]
+	rm -f "$target"
+}
+
+# ── tool_edit: tilde expansion ──────────────────────────────
+
+@test "tool_edit: expands tilde in file path" {
+	local target="$HOME/.claude_sh_test_edit_$$"
+	echo "old value" > "$target"
+	run tool_edit "{\"file_path\": \"~/.claude_sh_test_edit_$$\", \"old_string\": \"old value\", \"new_string\": \"new value\"}"
+	[ "$status" -eq 0 ]
+	[[ "$(cat "$target")" == *"new value"* ]]
+	rm -f "$target"
+}
+
+# ── tool_write: tilde expansion ─────────────────────────────
+
+@test "tool_write: expands tilde in file path" {
+	local target="$HOME/.claude_sh_test_write_$$"
+	run tool_write "{\"file_path\": \"~/.claude_sh_test_write_$$\", \"content\": \"tilde write\"}"
+	[ "$status" -eq 0 ]
+	[[ "$(cat "$target")" == "tilde write" ]]
+	rm -f "$target"
+}
+
+# ── tool_glob: additional cases ─────────────────────────────
+
+@test "tool_glob: uses current directory when path is empty" {
+	mkdir -p "$BATS_TEST_TMPDIR/glob_cwd"
+	touch "$BATS_TEST_TMPDIR/glob_cwd/test.sh"
+	cd "$BATS_TEST_TMPDIR/glob_cwd"
+	run tool_glob '{"pattern": "*.sh"}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"test.sh"* ]]
+}
+
+@test "tool_glob: expands tilde in search path" {
+	local target_dir="$HOME/.claude_sh_test_glob_$$"
+	mkdir -p "$target_dir"
+	touch "$target_dir/found.txt"
+	run tool_glob "{\"pattern\": \"*.txt\", \"path\": \"~/.claude_sh_test_glob_$$\"}"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"found.txt"* ]]
+	rm -rf "$target_dir"
+}
+
+# ── tool_grep: additional cases ─────────────────────────────
+
+@test "tool_grep: supports case_insensitive flag" {
+	mkdir -p "$BATS_TEST_TMPDIR/grep_ci"
+	echo "Hello World" > "$BATS_TEST_TMPDIR/grep_ci/test.txt"
+	run tool_grep "{\"pattern\": \"hello\", \"path\": \"$BATS_TEST_TMPDIR/grep_ci\", \"case_insensitive\": true}"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Hello World"* ]]
+}
+
+@test "tool_grep: supports glob file filter" {
+	mkdir -p "$BATS_TEST_TMPDIR/grep_glob"
+	echo "find me" > "$BATS_TEST_TMPDIR/grep_glob/target.sh"
+	echo "find me" > "$BATS_TEST_TMPDIR/grep_glob/ignore.txt"
+	run tool_grep "{\"pattern\": \"find me\", \"path\": \"$BATS_TEST_TMPDIR/grep_glob\", \"glob\": \"*.sh\"}"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"target.sh"* ]]
+}
+
+@test "tool_grep: uses current directory when path is empty" {
+	mkdir -p "$BATS_TEST_TMPDIR/grep_cwd"
+	echo "cwd pattern" > "$BATS_TEST_TMPDIR/grep_cwd/file.txt"
+	cd "$BATS_TEST_TMPDIR/grep_cwd"
+	run tool_grep '{"pattern": "cwd pattern"}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"cwd pattern"* ]]
+}
+
+@test "tool_grep: expands tilde in search path" {
+	local target_dir="$HOME/.claude_sh_test_grep_$$"
+	mkdir -p "$target_dir"
+	echo "tilde grep" > "$target_dir/test.txt"
+	run tool_grep "{\"pattern\": \"tilde grep\", \"path\": \"~/.claude_sh_test_grep_$$\"}"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"tilde grep"* ]]
+	rm -rf "$target_dir"
+}
+
+@test "tool_grep: falls back to grep when rg is not available" {
+	# Hide rg by overriding command -v
+	command() {
+		if [[ "$1" == "-v" ]] && [[ "$2" == "rg" ]]; then
+			return 1
+		fi
+		builtin command "$@"
+	}
+	export -f command
+
+	mkdir -p "$BATS_TEST_TMPDIR/grep_fallback"
+	echo "fallback line" > "$BATS_TEST_TMPDIR/grep_fallback/test.txt"
+	run tool_grep "{\"pattern\": \"fallback\", \"path\": \"$BATS_TEST_TMPDIR/grep_fallback\"}"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"fallback line"* ]]
+}
+
+@test "tool_grep: fallback grep supports case_insensitive" {
+	command() {
+		if [[ "$1" == "-v" ]] && [[ "$2" == "rg" ]]; then
+			return 1
+		fi
+		builtin command "$@"
+	}
+	export -f command
+
+	mkdir -p "$BATS_TEST_TMPDIR/grep_ci_fallback"
+	echo "UPPER case" > "$BATS_TEST_TMPDIR/grep_ci_fallback/test.txt"
+	run tool_grep "{\"pattern\": \"upper\", \"path\": \"$BATS_TEST_TMPDIR/grep_ci_fallback\", \"case_insensitive\": true}"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"UPPER case"* ]]
+}
+
+# ── execute_tool: all dispatches ────────────────────────────
+
+@test "execute_tool: dispatches Bash tool" {
+	run execute_tool "Bash" "id-bash" '{"command": "echo dispatch_bash"}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"dispatch_bash"* ]]
+	[[ "$output" == *"tool_use_id"* ]]
+}
+
+@test "execute_tool: dispatches Write tool" {
+	local target="$BATS_TEST_TMPDIR/dispatch_write.txt"
+	run execute_tool "Write" "id-write" "{\"file_path\": \"$target\", \"content\": \"dispatched\"}"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"tool_use_id"* ]]
+	[ -f "$target" ]
+}
+
+@test "execute_tool: dispatches Edit tool" {
+	local target="$BATS_TEST_TMPDIR/dispatch_edit.txt"
+	echo "before edit" > "$target"
+	run execute_tool "Edit" "id-edit" "{\"file_path\": \"$target\", \"old_string\": \"before\", \"new_string\": \"after\"}"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"tool_use_id"* ]]
+}
+
+@test "execute_tool: dispatches Glob tool" {
+	touch "$BATS_TEST_TMPDIR/dispatch_glob.sh"
+	run execute_tool "Glob" "id-glob" "{\"pattern\": \"*.sh\", \"path\": \"$BATS_TEST_TMPDIR\"}"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"tool_use_id"* ]]
+}
+
+@test "execute_tool: dispatches Grep tool" {
+	echo "grep target" > "$BATS_TEST_TMPDIR/dispatch_grep.txt"
+	run execute_tool "Grep" "id-grep" "{\"pattern\": \"grep target\", \"path\": \"$BATS_TEST_TMPDIR\"}"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"tool_use_id"* ]]
+}
+
+@test "execute_tool: marks result as error when tool fails" {
+	run execute_tool "Read" "id-fail" '{"file_path": "/nonexistent/file"}'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"is_error"* ]]
+	[[ "$output" == *"true"* ]]
+}

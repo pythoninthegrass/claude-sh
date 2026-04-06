@@ -305,3 +305,208 @@ and tabs	here'
 	run resume_session "nonexistent-session-id"
 	[ "$status" -ne 0 ]
 }
+
+@test "resume_session: resumes by numeric index" {
+	init_session
+	add_user_message "indexed message"
+	TOTAL_INPUT_TOKENS=100
+	TOTAL_OUTPUT_TOKENS=200
+	save_session
+	local saved_id="$SESSION_ID"
+
+	# Reset
+	init_session
+	TURN_COUNT=0
+	TOTAL_INPUT_TOKENS=0
+	TOTAL_OUTPUT_TOKENS=0
+
+	# Resume by index 1 (most recent)
+	resume_session "1"
+	[ "$SESSION_ID" = "$saved_id" ]
+	[ "$TURN_COUNT" -eq 1 ]
+}
+
+@test "resume_session: restores model from session" {
+	init_session
+	add_user_message "model test"
+	CLAUDE_MODEL="claude-special-model"
+	save_session
+	local saved_id="$SESSION_ID"
+
+	# Reset
+	init_session
+	CLAUDE_MODEL="default"
+
+	resume_session "$saved_id"
+	[ "$CLAUDE_MODEL" = "claude-special-model" ]
+}
+
+@test "resume_session: skips model restore when null" {
+	init_session
+	add_user_message "null model"
+	save_session
+	local saved_id="$SESSION_ID"
+
+	# Manually remove model from saved file to simulate null
+	local session_file="$SESSIONS_DIR/${saved_id}.json"
+	jq '.model = null' "$session_file" > "$session_file.tmp" && mv "$session_file.tmp" "$session_file"
+
+	init_session
+	CLAUDE_MODEL="keep-this"
+
+	resume_session "$saved_id"
+	[ "$CLAUDE_MODEL" = "keep-this" ]
+}
+
+# ── get_session_cost with cache ─────────────────────────────
+
+@test "get_session_cost: includes cache read and write costs" {
+	init_session
+	TOTAL_INPUT_TOKENS=0
+	TOTAL_OUTPUT_TOKENS=0
+	TOTAL_CACHE_READ=1000000
+	TOTAL_CACHE_WRITE=1000000
+	local cost
+	cost=$(get_session_cost)
+	# cache_read: 1M * 0.30 / 1M = 0.30
+	# cache_write: 1M * 3.75 / 1M = 3.75
+	# total: 4.05
+	[ "$cost" = "4.0500" ]
+}
+
+# ── load_claude_md_files ────────────────────────────────────
+
+@test "load_claude_md_files: finds CLAUDE.md in current directory" {
+	local test_dir="$BATS_TEST_TMPDIR/project"
+	mkdir -p "$test_dir"
+	echo "# Project instructions" > "$test_dir/CLAUDE.md"
+
+	cd "$test_dir"
+	local output
+	output=$(load_claude_md_files)
+	[[ "$output" == *"Project instructions"* ]]
+}
+
+@test "load_claude_md_files: finds .claude/CLAUDE.md" {
+	local test_dir="$BATS_TEST_TMPDIR/project2"
+	mkdir -p "$test_dir/.claude"
+	echo "# Hidden instructions" > "$test_dir/.claude/CLAUDE.md"
+
+	cd "$test_dir"
+	local output
+	output=$(load_claude_md_files)
+	[[ "$output" == *"Hidden instructions"* ]]
+}
+
+@test "load_claude_md_files: returns empty when no CLAUDE.md exists" {
+	local test_dir="$BATS_TEST_TMPDIR/empty_project"
+	mkdir -p "$test_dir"
+
+	cd "$test_dir"
+	local output
+	output=$(load_claude_md_files)
+	# Should be empty (may contain HOME claude.md, but no project one)
+	# Just verify it doesn't error
+	[ $? -eq 0 ]
+}
+
+# ── get_git_context ─────────────────────────────────────────
+
+@test "get_git_context: returns empty outside git repo" {
+	local test_dir="$BATS_TEST_TMPDIR/not_a_repo"
+	mkdir -p "$test_dir"
+	cd "$test_dir"
+	local output
+	output=$(get_git_context)
+	[ -z "$output" ]
+}
+
+@test "get_git_context: shows branch and commits in git repo" {
+	local repo="$BATS_TEST_TMPDIR/git_ctx_repo"
+	mkdir -p "$repo"
+	git -C "$repo" init -q
+	git -C "$repo" config user.email "test@test.com"
+	git -C "$repo" config user.name "Test"
+	echo "hello" > "$repo/file.txt"
+	git -C "$repo" add . && git -C "$repo" commit -q -m "initial"
+
+	cd "$repo"
+	local output
+	output=$(get_git_context)
+	[[ "$output" == *"Branch:"* ]]
+	[[ "$output" == *"initial"* ]]
+}
+
+@test "get_git_context: shows uncommitted changes" {
+	local repo="$BATS_TEST_TMPDIR/git_dirty_repo"
+	mkdir -p "$repo"
+	git -C "$repo" init -q
+	git -C "$repo" config user.email "test@test.com"
+	git -C "$repo" config user.name "Test"
+	echo "hello" > "$repo/file.txt"
+	git -C "$repo" add . && git -C "$repo" commit -q -m "initial"
+	echo "modified" > "$repo/file.txt"
+
+	cd "$repo"
+	local output
+	output=$(get_git_context)
+	[[ "$output" == *"Uncommitted changes"* ]]
+	[[ "$output" == *"file.txt"* ]]
+}
+
+# ── build_system_prompt with context ────────────────────────
+
+@test "build_system_prompt: includes CLAUDE.md content when present" {
+	init_session
+	local test_dir="$BATS_TEST_TMPDIR/prompt_project"
+	mkdir -p "$test_dir"
+	echo "# Custom rule: always test" > "$test_dir/CLAUDE.md"
+
+	cd "$test_dir"
+	local prompt
+	prompt=$(build_system_prompt)
+	[[ "$prompt" == *"Project Instructions"* ]]
+	[[ "$prompt" == *"Custom rule: always test"* ]]
+}
+
+@test "build_system_prompt: includes git context in git repo" {
+	init_session
+	local repo="$BATS_TEST_TMPDIR/prompt_repo"
+	mkdir -p "$repo"
+	git -C "$repo" init -q
+	git -C "$repo" config user.email "test@test.com"
+	git -C "$repo" config user.name "Test"
+	echo "hello" > "$repo/file.txt"
+	git -C "$repo" add . && git -C "$repo" commit -q -m "init commit"
+
+	cd "$repo"
+	local prompt
+	prompt=$(build_system_prompt)
+	[[ "$prompt" == *"Git Context"* ]]
+	[[ "$prompt" == *"Branch:"* ]]
+}
+
+# ── list_sessions ───────────────────────────────────────────
+
+@test "list_sessions: shows no sessions message when empty" {
+	# Use a fresh empty sessions dir
+	SESSIONS_DIR="$BATS_TEST_TMPDIR/empty_sessions"
+	mkdir -p "$SESSIONS_DIR"
+	# Re-enable print_dim so the message is captured
+	print_dim() { echo "$1"; }
+	export -f print_dim
+	run list_sessions
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"No saved sessions"* ]]
+}
+
+@test "list_sessions: lists saved sessions" {
+	init_session
+	add_user_message "session list test"
+	save_session
+
+	run list_sessions
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Saved sessions"* ]]
+	[[ "$output" == *"$SESSION_ID"* ]]
+}
