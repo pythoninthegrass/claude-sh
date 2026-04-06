@@ -2,6 +2,7 @@
 .env
 .env.local
 *.log
+AGENTS.md
 coverage/
 
 # General
