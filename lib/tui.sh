@@ -136,10 +136,16 @@ print_separator() {
 
 # Banner
 print_banner() {
+    local title="claude.sh"
+    local subtitle="bash edition"
+    local inner="  ${title} — ${subtitle}   "
+    local border
+    border=$(printf '%*s' "${#inner}" '' | tr ' ' '─')
+
     printf '\n'
-    printf '%b╭─────────────────────────────╮%b\n' "$CLAUDE" "$RESET"
-    printf '%b│%b  claude.sh %b— bash edition   %b│%b\n' "$CLAUDE" "$BOLD$WHITE" "$DIM" "$CLAUDE" "$RESET"
-    printf '%b╰─────────────────────────────╯%b\n' "$CLAUDE" "$RESET"
+    printf '%b╭%s╮%b\n' "$CLAUDE" "$border" "$RESET"
+    printf '%b│%b  %s %b— %s   %b│%b\n' "$CLAUDE" "$BOLD$WHITE" "$title" "$DIM" "$subtitle" "$CLAUDE" "$RESET"
+    printf '%b╰%s╯%b\n' "$CLAUDE" "$border" "$RESET"
     printf '%b  model: %s%b\n' "$DIM" "${CLAUDE_MODEL:-claude-sonnet-4-20250514}" "$RESET"
     printf '%b  type /help for commands, ctrl-c to cancel%b\n\n' "$DIM" "$RESET"
 }
