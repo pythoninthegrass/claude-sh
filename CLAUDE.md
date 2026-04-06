@@ -22,7 +22,21 @@ bats test/
 # Tabs for shell files, spaces for everything else (see .editorconfig)
 ```
 
-Runtime versions are pinned in `.tool-versions` (bats 1.13.0, jq 1.8.1). Use `mise` to install them.
+Runtime versions are pinned in `.tool-versions`. Use `mise` to install them.
+
+```bash
+# Run tests with coverage via kcov in Ubuntu container (kcov needs Linux ptrace)
+docker run --rm --platform linux/arm64 -v "$PWD":/work -w /work ubuntu:24.04 bash -c "
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq >/dev/null 2>&1
+  apt-get install -y -qq bats jq binutils cmake g++ pkg-config zlib1g-dev \
+    libcurl4-openssl-dev libdw-dev libiberty-dev libssl-dev git >/dev/null 2>&1
+  cd /tmp && git clone --depth 1 https://github.com/SimonKagstrom/kcov.git >/dev/null 2>&1
+  cd kcov && mkdir build && cd build && cmake .. >/dev/null 2>&1
+  make -j\$(nproc) >/dev/null 2>&1 && make install >/dev/null 2>&1
+  kcov --bash-dont-parse-binary-dir /work/coverage bats /work/test/
+"
+```
 
 ## Architecture
 
@@ -82,3 +96,4 @@ Always use Context7 MCP when I need library/API documentation, code generation, 
 - bats-core/bats-core
 - j178/prek
 - jdx/mise
+- simonkagstrom/kcov
