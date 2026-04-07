@@ -1,11 +1,15 @@
 #!/usr/bin/env -S uv run --script
 
 # /// script
-# requires-python = ">=3.13,<3.14"
-# dependencies = []
+# requires-python = ">=3.13"
+# dependencies = [
+#     "sh>=2.2.2",
+# ]
 # [tool.uv]
 # exclude-newer = "2026-04-30T00:00:00Z"
 # ///
+
+# pyright: reportMissingImports=false
 
 """Benchmark claude.sh hot paths.
 
@@ -16,10 +20,11 @@ Usage:
 import argparse
 import json
 import os
-import subprocess
+import sys
 import textwrap
 import time
 from pathlib import Path
+from sh import bash, ErrorReturnCode
 
 
 def repo_root() -> Path:
@@ -45,17 +50,17 @@ def run_tool_turn(iterations: int) -> dict[str, object]:
         """
     ).strip()
 
+    env = os.environ.copy()
+    env["ITERATIONS"] = str(iterations)
+
     started = time.perf_counter()
-    completed = subprocess.run(
-        ["bash", "-lc", command],
-        cwd=root,
-        env={**os.environ, "ITERATIONS": str(iterations)},
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    try:
+        result = bash("-lc", command, _cwd=root, _env=env, _tty_out=False)
+    except ErrorReturnCode as e:
+        print(f"Benchmark failed (exit {e.exit_code}): {e.stderr}", file=sys.stderr)
+        raise SystemExit(1) from e
     seconds = time.perf_counter() - started
-    payload = json.loads(completed.stdout)
+    payload = json.loads(str(result))
     return {
         "benchmark": "tool-turn",
         "iterations": iterations,
