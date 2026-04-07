@@ -217,6 +217,10 @@ process_sse_event() {
 				--argjson block "$block" \
 				'. += [$block | .text = $text]' "$blocks_file" >"${blocks_file}.tmp" &&
 				mv "${blocks_file}.tmp" "$blocks_file"
+			# Flush buffered text to terminal in one shot
+			if [[ -n "${CLAUDE_SH_BUFFER_OUTPUT:-}" ]]; then
+				cat "$text_accum_file"
+			fi
 		elif [[ "$block" == *'"tool_use"'* ]]; then
 			local tool_json
 			tool_json=$(cat "$tool_json_file")
@@ -269,8 +273,11 @@ process_sse_event() {
 				;;
 			T) # text_delta: stream to terminal and accumulate
 				local payload="${result:1}"
-				printf '%s' "$payload"
+				[[ -z "${CLAUDE_SH_BUFFER_OUTPUT:-}" ]] && printf '%s' "$payload"
 				printf '%s' "$payload" >>"$text_accum_file"
+				if [[ -n "${CLAUDE_SH_DEBUG_STREAM:-}" ]]; then
+					printf '%s\t%d\n' "$(date +%s.%N)" "${#payload}" >>"$CLAUDE_SH_DEBUG_STREAM"
+				fi
 				;;
 			J) # input_json_delta: accumulate tool input
 				printf '%s' "${result:1}" >>"$tool_json_file"
@@ -325,8 +332,11 @@ process_sse_event() {
 		if [[ "$data" == *'"text_delta"'* ]]; then
 			local text
 			text=$(echo "$data" | jq -r '.delta.text // empty' 2>/dev/null)
-			printf '%s' "$text"
+			[[ -z "${CLAUDE_SH_BUFFER_OUTPUT:-}" ]] && printf '%s' "$text"
 			printf '%s' "$text" >>"$text_accum_file"
+			if [[ -n "${CLAUDE_SH_DEBUG_STREAM:-}" ]]; then
+				printf '%s\t%d\n' "$(date +%s.%N)" "${#text}" >>"$CLAUDE_SH_DEBUG_STREAM"
+			fi
 		elif [[ "$data" == *'"input_json_delta"'* ]]; then
 			local partial
 			partial=$(echo "$data" | jq -r '.delta.partial_json // empty' 2>/dev/null)

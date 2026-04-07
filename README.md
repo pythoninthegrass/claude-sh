@@ -58,6 +58,8 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 | `CLAUDE_MAX_TOKENS` | `8192` | Max output tokens |
 | `ANTHROPIC_API_URL` | `https://api.anthropic.com` | API base URL |
 | `CLAUDE_SH_PERMISSIONS` | `ask` | Permission mode: `ask`, `allow`, or `deny` |
+| `CLAUDE_SH_BUFFER_OUTPUT` | `false` (optional) | Buffer text and flush at block end instead of streaming |
+| `CLAUDE_SH_DEBUG_STREAM` | `false` (optional) | Log SSE delta timestamps to file (e.g. `/tmp/stream.log`) |
 
 ### Commands
 

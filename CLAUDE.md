@@ -86,6 +86,8 @@ Three modes via `CLAUDE_SH_PERMISSIONS`: `ask` (default), `allow`, `deny`. Read-
 | `TAVILY_API_KEY` | (optional) | Tavily Search API key |
 | `OLLAMA_API_KEY` | (optional) | Ollama API key (`ollama signin`) |
 | `SEARXNG_URL` | (optional) | SearXNG instance URL (e.g. `http://localhost:8080`) |
+| `CLAUDE_SH_DEBUG_STREAM` | `false` (optional) | Log file path for SSE delta timestamps (e.g. `/tmp/stream.log`) |
+| `CLAUDE_SH_BUFFER_OUTPUT` | `false` (optional) | Buffer text output and flush at block end instead of streaming |
 
 ## ShellCheck
 
