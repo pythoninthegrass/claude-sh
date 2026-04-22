@@ -13,6 +13,10 @@
 
 """Benchmark claude.sh hot paths.
 
+Measures wall-clock time of the tool-turn loop (extract_tool_uses,
+tool_result_json, append_tool_result_json) by sourcing claude.sh and
+running the cycle N times inside a single bash process.
+
 Usage:
     bench.py tool-turn [--iterations N]
 """
